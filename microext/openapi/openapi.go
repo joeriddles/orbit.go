@@ -24,9 +24,6 @@ const (
 )
 
 type APIConfig struct {
-	Title          string
-	Version        string
-	Description    string
 	OpenAPISubject string
 }
 
@@ -127,17 +124,16 @@ func (a *API) AddEndpoint(name string, handler micro.Handler, opts ...EndpointOp
 		opt(&cfg)
 	}
 
-	subject := name
-	if cfg.subject != "" {
-		subject = cfg.subject
+	if cfg.subject == "" {
+		cfg.subject = name
 	}
 
-	microOpts := buildMicroOpts(subject, &cfg)
+	microOpts := buildMicroOpts(&cfg)
 	if err := a.svc.AddEndpoint(name, handler, microOpts...); err != nil {
 		return err
 	}
 
-	op := newOperationInfo(name, subject, &cfg)
+	op := newOperationInfo(name, &cfg)
 	a.mu.Lock()
 	a.ops = append(a.ops, op)
 	a.rebuildSpecLocked()
@@ -151,18 +147,17 @@ func (g *APIGroup) AddEndpoint(name string, handler micro.Handler, opts ...Endpo
 		opt(&cfg)
 	}
 
-	subject := name
-	if cfg.subject != "" {
-		subject = cfg.subject
+	if cfg.subject == "" {
+		cfg.subject = name
 	}
-	fullSubject := joinSubject(g.prefix, subject)
+	cfg.subject = joinSubject(g.prefix, cfg.subject)
 
-	microOpts := buildMicroOpts(subject, &cfg)
+	microOpts := buildMicroOpts(&cfg)
 	if err := g.group.AddEndpoint(name, handler, microOpts...); err != nil {
 		return err
 	}
 
-	op := newOperationInfo(name, fullSubject, &cfg)
+	op := newOperationInfo(name, &cfg)
 	if len(op.tags) == 0 {
 		op.tags = []string{g.prefix}
 	}
@@ -295,18 +290,17 @@ func Register[I, O any](target any, name string, handler TypedHandler[I, O], opt
 }
 
 func (a *API) registerTyped(name string, handler micro.Handler, cfg *endpointConfig, op *operationInfo) error {
-	subject := name
-	if cfg.subject != "" {
-		subject = cfg.subject
+	if cfg.subject == "" {
+		cfg.subject = name
 	}
 
-	microOpts := buildMicroOptsFromOp(subject, cfg, op)
+	microOpts := buildMicroOptsFromOp(cfg, op)
 	if err := a.svc.AddEndpoint(name, handler, microOpts...); err != nil {
 		return err
 	}
 
 	op.name = name
-	op.subject = subject
+	op.subject = cfg.subject
 
 	a.mu.Lock()
 	a.ops = append(a.ops, op)
@@ -322,7 +316,7 @@ func (g *APIGroup) registerTyped(name string, handler micro.Handler, cfg *endpoi
 	}
 	fullSubject := joinSubject(g.prefix, subject)
 
-	microOpts := buildMicroOptsFromOp(subject, cfg, op)
+	microOpts := buildMicroOptsFromOp(cfg, op)
 	if err := g.group.AddEndpoint(name, handler, microOpts...); err != nil {
 		return err
 	}
@@ -347,12 +341,14 @@ func (a *API) rebuildSpec() {
 }
 
 func (a *API) rebuildSpecLocked() {
+	microInfo := a.svc.Info()
+
 	doc := &Document{
 		OpenAPI: "3.1.0",
 		Info: DocumentInfo{
-			Title:       a.cfg.Title,
-			Version:     a.cfg.Version,
-			Description: a.cfg.Description,
+			Title:       microInfo.Name,
+			Version:     microInfo.Version,
+			Description: microInfo.Description,
 		},
 		Paths: make(map[string]*PathItem),
 	}
@@ -445,10 +441,10 @@ func generateSchemaJSON[T any]() (json.RawMessage, error) {
 	return data, nil
 }
 
-func newOperationInfo(name, subject string, cfg *endpointConfig) *operationInfo {
+func newOperationInfo(name string, cfg *endpointConfig) *operationInfo {
 	op := &operationInfo{
 		name:          name,
-		subject:       subject,
+		subject:       cfg.subject,
 		operationID:   cfg.operationID,
 		summary:       cfg.summary,
 		description:   cfg.description,
@@ -465,7 +461,7 @@ func newOperationInfo(name, subject string, cfg *endpointConfig) *operationInfo 
 	return op
 }
 
-func buildMicroOpts(subject string, cfg *endpointConfig) []micro.EndpointOpt {
+func buildMicroOpts(cfg *endpointConfig) []micro.EndpointOpt {
 	var opts []micro.EndpointOpt
 	if cfg.subject != "" {
 		opts = append(opts, micro.WithEndpointSubject(cfg.subject))
@@ -482,7 +478,7 @@ func buildMicroOpts(subject string, cfg *endpointConfig) []micro.EndpointOpt {
 	return opts
 }
 
-func buildMicroOptsFromOp(subject string, cfg *endpointConfig, op *operationInfo) []micro.EndpointOpt {
+func buildMicroOptsFromOp(cfg *endpointConfig, op *operationInfo) []micro.EndpointOpt {
 	var opts []micro.EndpointOpt
 	if cfg.subject != "" {
 		opts = append(opts, micro.WithEndpointSubject(cfg.subject))

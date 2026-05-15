@@ -47,10 +47,7 @@ func TestRegisterTypedHandler(t *testing.T) {
 	}
 	defer svc.Stop()
 
-	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{
-		Title:   "User Service",
-		Version: "1.0.0",
-	})
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create API: %v", err)
 	}
@@ -99,10 +96,7 @@ func TestRegisterWithGroup(t *testing.T) {
 	}
 	defer svc.Stop()
 
-	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{
-		Title:   "My App",
-		Version: "1.0.0",
-	})
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create API: %v", err)
 	}
@@ -166,10 +160,7 @@ func TestValidationRejectsInvalidInput(t *testing.T) {
 	}
 	defer svc.Stop()
 
-	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{
-		Title:   "Validation Test",
-		Version: "1.0.0",
-	})
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create API: %v", err)
 	}
@@ -212,10 +203,7 @@ func TestHandlerErrorPropagation(t *testing.T) {
 	}
 	defer svc.Stop()
 
-	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{
-		Title:   "Error Test",
-		Version: "1.0.0",
-	})
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create API: %v", err)
 	}
@@ -280,10 +268,7 @@ func TestAddEndpointTier2(t *testing.T) {
 	}
 	defer svc.Stop()
 
-	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{
-		Title:   "Tier 2 Test",
-		Version: "1.0.0",
-	})
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create API: %v", err)
 	}
@@ -339,10 +324,7 @@ func TestOpenAPIControlSubject(t *testing.T) {
 	}
 	defer svc.Stop()
 
-	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{
-		Title:   "Spec Test",
-		Version: "1.0.0",
-	})
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create API: %v", err)
 	}
@@ -373,8 +355,8 @@ func TestOpenAPIControlSubject(t *testing.T) {
 	if doc.OpenAPI != "3.1.0" {
 		t.Fatalf("Expected OpenAPI 3.1.0, got %q", doc.OpenAPI)
 	}
-	if doc.Info.Title != "Spec Test" {
-		t.Fatalf("Expected title 'Spec Test', got %q", doc.Info.Title)
+	if doc.Info.Title != "spectest" {
+		t.Fatalf("Expected title 'spectest', got %q", doc.Info.Title)
 	}
 	if _, ok := doc.Paths["/spectest/create"]; !ok {
 		t.Fatalf("Expected path /spectest/create, got %v", keysOf(doc.Paths))
@@ -392,7 +374,7 @@ func TestOpenAPIControlSubject(t *testing.T) {
 	if err := json.Unmarshal(msg.Data, &doc2); err != nil {
 		t.Fatalf("Unmarshal instance spec: %v", err)
 	}
-	if doc2.Info.Title != "Spec Test" {
+	if doc2.Info.Title != "spectest" {
 		t.Fatalf("Instance spec mismatch")
 	}
 }
@@ -412,10 +394,7 @@ func TestSpecSchemaGeneration(t *testing.T) {
 	}
 	defer svc.Stop()
 
-	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{
-		Title:   "Schema Gen",
-		Version: "1.0.0",
-	})
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create API: %v", err)
 	}
@@ -506,10 +485,7 @@ func TestSubjectParams(t *testing.T) {
 	}
 	defer svc.Stop()
 
-	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{
-		Title:   "Param Test",
-		Version: "1.0.0",
-	})
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create API: %v", err)
 	}
@@ -580,10 +556,7 @@ func TestEndpointMetadata(t *testing.T) {
 	}
 	defer svc.Stop()
 
-	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{
-		Title:   "Meta Test",
-		Version: "1.0.0",
-	})
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create API: %v", err)
 	}
@@ -645,10 +618,7 @@ func TestNoInputType(t *testing.T) {
 	}
 	defer svc.Stop()
 
-	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{
-		Title:   "No Input",
-		Version: "1.0.0",
-	})
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
 	if err != nil {
 		t.Fatalf("Failed to create API: %v", err)
 	}
