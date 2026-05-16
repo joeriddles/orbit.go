@@ -23,8 +23,9 @@ const (
 	MetaKeySubjectParams  = "openapi:subject-params"
 )
 
+const openApiSubject = "$SRV.INFO.%s.$openapi"
+
 type APIConfig struct {
-	OpenAPISubject string
 }
 
 type API struct {
@@ -79,11 +80,7 @@ func NewAPI(nc *nats.Conn, svc micro.Service, cfg APIConfig) (*API, error) {
 	}
 
 	info := svc.Info()
-
-	subject := cfg.OpenAPISubject
-	if subject == "" {
-		subject = fmt.Sprintf("$SRV.INFO.%s.$openapi", info.Name)
-	}
+	subject := fmt.Sprintf(openApiSubject, info.Name)
 
 	handler := func(m *nats.Msg) {
 		api.mu.Lock()
