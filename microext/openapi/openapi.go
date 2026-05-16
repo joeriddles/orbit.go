@@ -25,25 +25,29 @@ const (
 
 const openApiSubject = "$SRV.INFO.%s.$openapi"
 
+type Middleware func(micro.Handler) micro.Handler
+
 type APIConfig struct {
 	SubjectPrefix string
 }
 
 type API struct {
-	nc       *nats.Conn
-	svc      micro.Service
-	cfg      APIConfig
-	ops      []*operationInfo
-	specJSON []byte
-	subs     []*nats.Subscription
-	mu       sync.Mutex
+	nc          *nats.Conn
+	svc         micro.Service
+	cfg         APIConfig
+	ops         []*operationInfo
+	specJSON    []byte
+	subs        []*nats.Subscription
+	middlewares []Middleware
+	mu          sync.Mutex
 }
 
 type APIGroup struct {
-	api    *API
-	group  micro.Group
-	prefix string
-	tags   []string
+	api         *API
+	group       micro.Group
+	prefix      string
+	tags        []string
+	middlewares []Middleware
 }
 
 type operationInfo struct {
@@ -108,6 +112,21 @@ func NewAPI(nc *nats.Conn, svc micro.Service, cfg APIConfig) (*API, error) {
 	return api, nil
 }
 
+func (a *API) Use(middlewares ...Middleware) {
+	a.middlewares = append(a.middlewares, middlewares...)
+}
+
+func (g *APIGroup) Use(middlewares ...Middleware) {
+	g.middlewares = append(g.middlewares, middlewares...)
+}
+
+func applyMiddleware(h micro.Handler, middlewares []Middleware) micro.Handler {
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		h = middlewares[i](h)
+	}
+	return h
+}
+
 func (a *API) AddGroup(name string, opts ...GroupOpt) *APIGroup {
 	cfg := parseGroupOpts(opts)
 	prefix := name
@@ -115,11 +134,14 @@ func (a *API) AddGroup(name string, opts ...GroupOpt) *APIGroup {
 		prefix = cfg.subjectPrefix
 	}
 	g := a.svc.AddGroup(name, cfg.microOpts...)
+	mw := make([]Middleware, len(a.middlewares))
+	copy(mw, a.middlewares)
 	return &APIGroup{
-		api:    a,
-		group:  g,
-		prefix: prefix,
-		tags:   cfg.tags,
+		api:         a,
+		group:       g,
+		prefix:      prefix,
+		tags:        cfg.tags,
+		middlewares: mw,
 	}
 }
 
@@ -134,7 +156,8 @@ func (a *API) AddEndpoint(name string, handler micro.Handler, opts ...EndpointOp
 	}
 
 	microOpts := buildMicroOpts(&cfg)
-	if err := a.svc.AddEndpoint(name, handler, microOpts...); err != nil {
+	wrapped := applyMiddleware(handler, a.middlewares)
+	if err := a.svc.AddEndpoint(name, wrapped, microOpts...); err != nil {
 		return err
 	}
 
@@ -160,7 +183,8 @@ func (g *APIGroup) AddEndpoint(name string, handler micro.Handler, opts ...Endpo
 	fullSubject := joinSubject(g.prefix, subject)
 
 	microOpts := buildMicroOpts(&cfg)
-	if err := g.group.AddEndpoint(name, handler, microOpts...); err != nil {
+	wrapped := applyMiddleware(handler, g.middlewares)
+	if err := g.group.AddEndpoint(name, wrapped, microOpts...); err != nil {
 		return err
 	}
 
@@ -180,11 +204,14 @@ func (g *APIGroup) AddEndpoint(name string, handler micro.Handler, opts ...Endpo
 func (g *APIGroup) AddGroup(name string, opts ...GroupOpt) *APIGroup {
 	cfg := parseGroupOpts(opts)
 	sub := g.group.AddGroup(name, cfg.microOpts...)
+	mw := make([]Middleware, len(g.middlewares))
+	copy(mw, g.middlewares)
 	return &APIGroup{
-		api:    g.api,
-		group:  sub,
-		prefix: joinSubject(g.prefix, name),
-		tags:   cfg.tags,
+		api:         g.api,
+		group:       sub,
+		prefix:      joinSubject(g.prefix, name),
+		tags:        cfg.tags,
+		middlewares: mw,
 	}
 }
 
@@ -305,7 +332,8 @@ func (a *API) registerTyped(name string, handler micro.Handler, cfg *endpointCon
 	}
 
 	microOpts := buildMicroOptsFromOp(cfg, op)
-	if err := a.svc.AddEndpoint(name, handler, microOpts...); err != nil {
+	wrapped := applyMiddleware(handler, a.middlewares)
+	if err := a.svc.AddEndpoint(name, wrapped, microOpts...); err != nil {
 		return err
 	}
 
@@ -327,7 +355,8 @@ func (g *APIGroup) registerTyped(name string, handler micro.Handler, cfg *endpoi
 	fullSubject := joinSubject(g.prefix, subject)
 
 	microOpts := buildMicroOptsFromOp(cfg, op)
-	if err := g.group.AddEndpoint(name, handler, microOpts...); err != nil {
+	wrapped := applyMiddleware(handler, g.middlewares)
+	if err := g.group.AddEndpoint(name, wrapped, microOpts...); err != nil {
 		return err
 	}
 
