@@ -26,6 +26,7 @@ const (
 const openApiSubject = "$SRV.INFO.%s.$openapi"
 
 type APIConfig struct {
+	SubjectPrefix string
 }
 
 type API struct {
@@ -138,6 +139,7 @@ func (a *API) AddEndpoint(name string, handler micro.Handler, opts ...EndpointOp
 	}
 
 	op := newOperationInfo(name, &cfg)
+	op.subject = joinSubject(a.cfg.SubjectPrefix, op.subject)
 	a.mu.Lock()
 	a.ops = append(a.ops, op)
 	a.rebuildSpecLocked()
@@ -163,7 +165,7 @@ func (g *APIGroup) AddEndpoint(name string, handler micro.Handler, opts ...Endpo
 	}
 
 	op := newOperationInfo(name, &cfg)
-	op.subject = fullSubject
+	op.subject = joinSubject(g.api.cfg.SubjectPrefix, fullSubject)
 	if len(op.tags) == 0 && len(g.tags) > 0 {
 		op.tags = g.tags
 	}
@@ -308,7 +310,7 @@ func (a *API) registerTyped(name string, handler micro.Handler, cfg *endpointCon
 	}
 
 	op.name = name
-	op.subject = cfg.subject
+	op.subject = joinSubject(a.cfg.SubjectPrefix, cfg.subject)
 
 	a.mu.Lock()
 	a.ops = append(a.ops, op)
@@ -330,7 +332,7 @@ func (g *APIGroup) registerTyped(name string, handler micro.Handler, cfg *endpoi
 	}
 
 	op.name = name
-	op.subject = fullSubject
+	op.subject = joinSubject(g.api.cfg.SubjectPrefix, fullSubject)
 	if len(op.tags) == 0 && len(g.tags) > 0 {
 		op.tags = g.tags
 	}
