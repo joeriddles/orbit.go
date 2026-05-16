@@ -34,7 +34,6 @@ type endpointConfig struct {
 	summary        string
 	description    string
 	tags           []string
-	subjectParams  []string
 	requestSchema  string
 	responseSchema string
 	queueGroup     string
@@ -59,10 +58,6 @@ func WithDescription(d string) EndpointOpt {
 
 func WithTags(tags ...string) EndpointOpt {
 	return func(c *endpointConfig) { c.tags = tags }
-}
-
-func WithSubjectParams(names ...string) EndpointOpt {
-	return func(c *endpointConfig) { c.subjectParams = names }
 }
 
 func WithRequestSchema(schema string) EndpointOpt {

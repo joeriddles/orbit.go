@@ -614,10 +614,9 @@ func TestSubjectParams(t *testing.T) {
 	err = openapi.Register(
 		api, "get-user",
 		func(req openapi.TypedRequest[struct{}]) (*GetUserOutput, error) {
-			return &GetUserOutput{ID: "1", Name: "Alice", Email: "a@b.com"}, nil
+			return &GetUserOutput{ID: req.Param("id"), Name: "Alice", Email: "a@b.com"}, nil
 		},
-		openapi.WithSubject("users.*.profile"),
-		openapi.WithSubjectParams("id"),
+		openapi.WithSubject("users.{id}.profile"),
 		openapi.WithOperationID("getUserProfile"),
 	)
 	if err != nil {
@@ -635,6 +634,9 @@ func TestSubjectParams(t *testing.T) {
 	}
 	if output.Name != "Alice" {
 		t.Fatalf("Expected name 'Alice', got %q", output.Name)
+	}
+	if output.ID != "alice" {
+		t.Fatalf("Expected id 'alice' from Param, got %q", output.ID)
 	}
 
 	// Verify spec has parameterized path
@@ -930,6 +932,228 @@ func TestAddEndpointWithContext(t *testing.T) {
 	}
 	if string(resp.Data) != "has-context" {
 		t.Fatalf("Expected 'has-context', got %q", string(resp.Data))
+	}
+}
+
+func TestParamExtraction(t *testing.T) {
+	s := runServer(t)
+	defer s.Shutdown()
+	nc := connect(t, s)
+	defer nc.Close()
+
+	svc, err := micro.AddService(nc, micro.Config{
+		Name:    "paramext",
+		Version: "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Failed to add service: %v", err)
+	}
+	defer svc.Stop()
+
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
+	if err != nil {
+		t.Fatalf("Failed to create API: %v", err)
+	}
+
+	err = openapi.Register(
+		api, "get-user",
+		func(req openapi.TypedRequest[struct{}]) (*GetUserOutput, error) {
+			return &GetUserOutput{
+				ID:    req.Param("id"),
+				Name:  req.Param("id"),
+				Email: req.Param("missing"),
+			}, nil
+		},
+		openapi.WithSubject("users.{id}.profile"),
+	)
+	if err != nil {
+		t.Fatalf("Failed to register: %v", err)
+	}
+
+	msg, err := nc.Request("users.bob.profile", nil, time.Second)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	var out GetUserOutput
+	if err := json.Unmarshal(msg.Data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out.ID != "bob" {
+		t.Fatalf("Expected Param('id') = 'bob', got %q", out.ID)
+	}
+	if out.Email != "" {
+		t.Fatalf("Expected Param('missing') = '', got %q", out.Email)
+	}
+}
+
+func TestParamExtractionWithGroup(t *testing.T) {
+	s := runServer(t)
+	defer s.Shutdown()
+	nc := connect(t, s)
+	defer nc.Close()
+
+	svc, err := micro.AddService(nc, micro.Config{
+		Name:    "paramgrp",
+		Version: "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Failed to add service: %v", err)
+	}
+	defer svc.Stop()
+
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
+	if err != nil {
+		t.Fatalf("Failed to create API: %v", err)
+	}
+
+	grp := api.AddGroup("v1")
+	err = openapi.Register(
+		grp, "get-user",
+		func(req openapi.TypedRequest[struct{}]) (*GetUserOutput, error) {
+			return &GetUserOutput{
+				ID:   req.Param("id"),
+				Name: req.Param("id"),
+			}, nil
+		},
+		openapi.WithSubject("users.{id}.profile"),
+	)
+	if err != nil {
+		t.Fatalf("Failed to register: %v", err)
+	}
+
+	msg, err := nc.Request("v1.users.carol.profile", nil, time.Second)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	var out GetUserOutput
+	if err := json.Unmarshal(msg.Data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out.ID != "carol" {
+		t.Fatalf("Expected Param('id') = 'carol', got %q", out.ID)
+	}
+}
+
+func TestParamExtractionMultipleParams(t *testing.T) {
+	s := runServer(t)
+	defer s.Shutdown()
+	nc := connect(t, s)
+	defer nc.Close()
+
+	svc, err := micro.AddService(nc, micro.Config{
+		Name:    "multiparam",
+		Version: "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Failed to add service: %v", err)
+	}
+	defer svc.Stop()
+
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
+	if err != nil {
+		t.Fatalf("Failed to create API: %v", err)
+	}
+
+	err = openapi.Register(
+		api, "get-member",
+		func(req openapi.TypedRequest[struct{}]) (*GetUserOutput, error) {
+			return &GetUserOutput{
+				ID:   req.Param("user"),
+				Name: req.Param("org"),
+			}, nil
+		},
+		openapi.WithSubject("orgs.{org}.members.{user}"),
+	)
+	if err != nil {
+		t.Fatalf("Failed to register: %v", err)
+	}
+
+	msg, err := nc.Request("orgs.acme.members.alice", nil, time.Second)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	var out GetUserOutput
+	if err := json.Unmarshal(msg.Data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out.Name != "acme" {
+		t.Fatalf("Expected Param('org') = 'acme', got %q", out.Name)
+	}
+	if out.ID != "alice" {
+		t.Fatalf("Expected Param('user') = 'alice', got %q", out.ID)
+	}
+}
+
+func TestWildcardExtraction(t *testing.T) {
+	s := runServer(t)
+	defer s.Shutdown()
+	nc := connect(t, s)
+	defer nc.Close()
+
+	svc, err := micro.AddService(nc, micro.Config{
+		Name:    "wildcardtest",
+		Version: "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Failed to add service: %v", err)
+	}
+	defer svc.Stop()
+
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
+	if err != nil {
+		t.Fatalf("Failed to create API: %v", err)
+	}
+
+	err = api.AddEndpoint("get-file", openapi.HandlerFunc(func(req openapi.Request) {
+		req.Respond([]byte(req.Wildcard()))
+	}), openapi.WithSubject("files.>"))
+	if err != nil {
+		t.Fatalf("Failed to add endpoint: %v", err)
+	}
+
+	msg, err := nc.Request("files.docs.readme.txt", nil, time.Second)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if string(msg.Data) != "docs.readme.txt" {
+		t.Fatalf("Expected Wildcard() = 'docs.readme.txt', got %q", string(msg.Data))
+	}
+}
+
+func TestNoParamsReturnsEmpty(t *testing.T) {
+	s := runServer(t)
+	defer s.Shutdown()
+	nc := connect(t, s)
+	defer nc.Close()
+
+	svc, err := micro.AddService(nc, micro.Config{
+		Name:    "noparam",
+		Version: "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Failed to add service: %v", err)
+	}
+	defer svc.Stop()
+
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
+	if err != nil {
+		t.Fatalf("Failed to create API: %v", err)
+	}
+
+	err = api.AddEndpoint("health", openapi.HandlerFunc(func(req openapi.Request) {
+		result := req.Param("anything") + "|" + req.Wildcard()
+		req.Respond([]byte(result))
+	}))
+	if err != nil {
+		t.Fatalf("Failed to add endpoint: %v", err)
+	}
+
+	msg, err := nc.Request("health", nil, time.Second)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if string(msg.Data) != "|" {
+		t.Fatalf("Expected '|' (empty params), got %q", string(msg.Data))
 	}
 }
 

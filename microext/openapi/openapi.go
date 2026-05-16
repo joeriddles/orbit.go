@@ -20,7 +20,6 @@ const (
 	MetaKeySummary        = "openapi:summary"
 	MetaKeyDescription    = "openapi:description"
 	MetaKeyTags           = "openapi:tags"
-	MetaKeySubjectParams  = "openapi:subject-params"
 )
 
 const openApiSubject = "$SRV.INFO.%s.$openapi"
@@ -44,6 +43,7 @@ type APIGroup struct {
 	api         *API
 	group       micro.Group
 	prefix      string
+	microPrefix string
 	tags        []string
 	middlewares []Middleware
 }
@@ -125,9 +125,11 @@ func applyMiddleware(h Handler, middlewares []Middleware) Handler {
 	return h
 }
 
-func toMicroHandler(h Handler) micro.Handler {
+func toMicroHandler(h Handler, subjectPattern string) micro.Handler {
 	return micro.HandlerFunc(func(req micro.Request) {
-		h.HandleRequest(newRequest(req))
+		r := newRequest(req)
+		r.params = extractParams(subjectPattern, req.Subject())
+		h.HandleRequest(r)
 	})
 }
 
@@ -144,6 +146,7 @@ func (a *API) AddGroup(name string, opts ...GroupOpt) *APIGroup {
 		api:         a,
 		group:       g,
 		prefix:      prefix,
+		microPrefix: name,
 		tags:        cfg.tags,
 		middlewares: mw,
 	}
@@ -159,13 +162,18 @@ func (a *API) AddEndpoint(name string, handler Handler, opts ...EndpointOpt) err
 		cfg.subject = name
 	}
 
+	pattern := cfg.subject
+	natsSubject, parsedParams := parseSubjectPattern(cfg.subject)
+	cfg.subject = natsSubject
+
 	microOpts := buildMicroOpts(&cfg)
 	wrapped := applyMiddleware(handler, a.middlewares)
-	if err := a.svc.AddEndpoint(name, toMicroHandler(wrapped), microOpts...); err != nil {
+	if err := a.svc.AddEndpoint(name, toMicroHandler(wrapped, pattern), microOpts...); err != nil {
 		return err
 	}
 
 	op := newOperationInfo(name, &cfg)
+	op.subjectParams = parsedParams
 	op.subject = joinSubject(a.cfg.SubjectPrefix, op.subject)
 	a.mu.Lock()
 	a.ops = append(a.ops, op)
@@ -184,15 +192,21 @@ func (g *APIGroup) AddEndpoint(name string, handler Handler, opts ...EndpointOpt
 	if subject == "" {
 		subject = name
 	}
-	fullSubject := joinSubject(g.prefix, subject)
+
+	pattern := subject
+	natsSubject, parsedParams := parseSubjectPattern(subject)
+	cfg.subject = natsSubject
+	fullSubject := joinSubject(g.prefix, natsSubject)
 
 	microOpts := buildMicroOpts(&cfg)
 	wrapped := applyMiddleware(handler, g.middlewares)
-	if err := g.group.AddEndpoint(name, toMicroHandler(wrapped), microOpts...); err != nil {
+	microPattern := joinSubject(g.microPrefix, pattern)
+	if err := g.group.AddEndpoint(name, toMicroHandler(wrapped, microPattern), microOpts...); err != nil {
 		return err
 	}
 
 	op := newOperationInfo(name, &cfg)
+	op.subjectParams = parsedParams
 	op.subject = joinSubject(g.api.cfg.SubjectPrefix, fullSubject)
 	if len(op.tags) == 0 && len(g.tags) > 0 {
 		op.tags = g.tags
@@ -214,6 +228,7 @@ func (g *APIGroup) AddGroup(name string, opts ...GroupOpt) *APIGroup {
 		api:         g.api,
 		group:       sub,
 		prefix:      joinSubject(g.prefix, name),
+		microPrefix: joinSubject(g.microPrefix, name),
 		tags:        cfg.tags,
 		middlewares: mw,
 	}
@@ -314,7 +329,6 @@ func Register[I, O any](target any, name string, handler TypedHandler[I, O], opt
 		summary:        cfg.summary,
 		description:    cfg.description,
 		tags:           cfg.tags,
-		subjectParams:  cfg.subjectParams,
 		requestSchema:  reqSchemaJSON,
 		responseSchema: respSchemaJSON,
 		contentType:    codec.ContentType(),
@@ -335,9 +349,14 @@ func (a *API) registerTyped(name string, handler Handler, cfg *endpointConfig, o
 		cfg.subject = name
 	}
 
+	pattern := cfg.subject
+	natsSubject, parsedParams := parseSubjectPattern(cfg.subject)
+	cfg.subject = natsSubject
+	op.subjectParams = parsedParams
+
 	microOpts := buildMicroOptsFromOp(cfg, op)
 	wrapped := applyMiddleware(handler, a.middlewares)
-	if err := a.svc.AddEndpoint(name, toMicroHandler(wrapped), microOpts...); err != nil {
+	if err := a.svc.AddEndpoint(name, toMicroHandler(wrapped, pattern), microOpts...); err != nil {
 		return err
 	}
 
@@ -356,11 +375,17 @@ func (g *APIGroup) registerTyped(name string, handler Handler, cfg *endpointConf
 	if cfg.subject != "" {
 		subject = cfg.subject
 	}
-	fullSubject := joinSubject(g.prefix, subject)
+
+	pattern := subject
+	natsSubject, parsedParams := parseSubjectPattern(subject)
+	cfg.subject = natsSubject
+	op.subjectParams = parsedParams
+	fullSubject := joinSubject(g.prefix, natsSubject)
 
 	microOpts := buildMicroOptsFromOp(cfg, op)
 	wrapped := applyMiddleware(handler, g.middlewares)
-	if err := g.group.AddEndpoint(name, toMicroHandler(wrapped), microOpts...); err != nil {
+	microPattern := joinSubject(g.microPrefix, pattern)
+	if err := g.group.AddEndpoint(name, toMicroHandler(wrapped, microPattern), microOpts...); err != nil {
 		return err
 	}
 
@@ -486,14 +511,13 @@ func generateSchemaJSON[T any]() (json.RawMessage, error) {
 
 func newOperationInfo(name string, cfg *endpointConfig) *operationInfo {
 	op := &operationInfo{
-		name:          name,
-		subject:       cfg.subject,
-		operationID:   cfg.operationID,
-		summary:       cfg.summary,
-		description:   cfg.description,
-		tags:          cfg.tags,
-		subjectParams: cfg.subjectParams,
-		contentType:   "application/json",
+		name:        name,
+		subject:     cfg.subject,
+		operationID: cfg.operationID,
+		summary:     cfg.summary,
+		description: cfg.description,
+		tags:        cfg.tags,
+		contentType: "application/json",
 	}
 	if cfg.requestSchema != "" {
 		op.requestSchema = json.RawMessage(cfg.requestSchema)
@@ -513,8 +537,7 @@ func buildMicroOpts(cfg *endpointConfig) []micro.EndpointOpt {
 		opts = append(opts, micro.WithEndpointQueueGroup(cfg.queueGroup))
 	}
 
-	meta := buildMetadata(cfg.operationID, cfg.summary, cfg.description,
-		cfg.tags, cfg.subjectParams, cfg.requestSchema, cfg.responseSchema)
+	meta := buildMetadata(cfg.operationID, cfg.summary, cfg.description, cfg.tags, cfg.requestSchema, cfg.responseSchema)
 	if len(meta) > 0 {
 		opts = append(opts, micro.WithEndpointMetadata(meta))
 	}
@@ -530,15 +553,14 @@ func buildMicroOptsFromOp(cfg *endpointConfig, op *operationInfo) []micro.Endpoi
 		opts = append(opts, micro.WithEndpointQueueGroup(cfg.queueGroup))
 	}
 
-	meta := buildMetadata(op.operationID, op.summary, op.description,
-		op.tags, op.subjectParams, string(op.requestSchema), string(op.responseSchema))
+	meta := buildMetadata(op.operationID, op.summary, op.description, op.tags, string(op.requestSchema), string(op.responseSchema))
 	if len(meta) > 0 {
 		opts = append(opts, micro.WithEndpointMetadata(meta))
 	}
 	return opts
 }
 
-func buildMetadata(operationID, summary, description string, tags, subjectParams []string, reqSchema, respSchema string) map[string]string {
+func buildMetadata(operationID, summary, description string, tags []string, reqSchema, respSchema string) map[string]string {
 	meta := make(map[string]string)
 	if operationID != "" {
 		meta[MetaKeyOperationID] = operationID
@@ -552,9 +574,6 @@ func buildMetadata(operationID, summary, description string, tags, subjectParams
 	if len(tags) > 0 {
 		meta[MetaKeyTags] = strings.Join(tags, ",")
 	}
-	if len(subjectParams) > 0 {
-		meta[MetaKeySubjectParams] = strings.Join(subjectParams, ",")
-	}
 	if reqSchema != "" {
 		meta[MetaKeyRequestSchema] = reqSchema
 	}
@@ -565,6 +584,17 @@ func buildMetadata(operationID, summary, description string, tags, subjectParams
 		return nil
 	}
 	return meta
+}
+
+func parseSubjectPattern(subject string) (natsSubject string, params []string) {
+	tokens := strings.Split(subject, ".")
+	for i, tok := range tokens {
+		if strings.HasPrefix(tok, "{") && strings.HasSuffix(tok, "}") {
+			params = append(params, tok[1:len(tok)-1])
+			tokens[i] = "*"
+		}
+	}
+	return strings.Join(tokens, "."), params
 }
 
 func joinSubject(parts ...string) string {
