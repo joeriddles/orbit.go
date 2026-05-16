@@ -126,7 +126,7 @@ func TestRegisterWithGroup(t *testing.T) {
 		t.Fatalf("Expected ID '123', got %q", output.ID)
 	}
 
-	// Check spec has the group tag
+	// Prefix groups should not auto-tag
 	spec := api.Spec()
 	var doc openapi.Document
 	if err := json.Unmarshal(spec, &doc); err != nil {
@@ -140,8 +140,128 @@ func TestRegisterWithGroup(t *testing.T) {
 	if path.Post == nil {
 		t.Fatal("Expected POST operation")
 	}
-	if len(path.Post.Tags) == 0 || path.Post.Tags[0] != "users" {
-		t.Fatalf("Expected tag 'users', got %v", path.Post.Tags)
+	if len(path.Post.Tags) != 0 {
+		t.Fatalf("Expected no tags on prefix group endpoint, got %v", path.Post.Tags)
+	}
+}
+
+func TestWithGroupSubjectPrefix(t *testing.T) {
+	s := runServer(t)
+	defer s.Shutdown()
+	nc := connect(t, s)
+	defer nc.Close()
+
+	svc, err := micro.AddService(nc, micro.Config{
+		Name:    "prefixapp",
+		Version: "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Failed to add service: %v", err)
+	}
+	defer svc.Stop()
+
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
+	if err != nil {
+		t.Fatalf("Failed to create API: %v", err)
+	}
+
+	grp := api.AddGroup("v1", openapi.WithGroupSubjectPrefix("api.v1"))
+	err = openapi.Register(
+		grp, "create",
+		func(req openapi.TypedRequest[CreateUserInput]) (*CreateUserOutput, error) {
+			return &CreateUserOutput{ID: "prefix-123"}, nil
+		},
+		openapi.WithSummary("Create user"),
+	)
+	if err != nil {
+		t.Fatalf("Failed to register: %v", err)
+	}
+
+	// Micro group routes on the group name "v1"
+	msg, err := nc.Request("v1.create", []byte(`{"name":"alice","email":"a@b.com"}`), time.Second)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	var output CreateUserOutput
+	if err := json.Unmarshal(msg.Data, &output); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
+	if output.ID != "prefix-123" {
+		t.Fatalf("Expected ID 'prefix-123', got %q", output.ID)
+	}
+
+	// Spec path should use the subject prefix, not the group name
+	var doc openapi.Document
+	if err := json.Unmarshal(api.Spec(), &doc); err != nil {
+		t.Fatalf("Unmarshal spec: %v", err)
+	}
+	if _, ok := doc.Paths["/api/v1/create"]; !ok {
+		t.Fatalf("Expected path /api/v1/create, got paths: %v", keysOf(doc.Paths))
+	}
+	if _, ok := doc.Paths["/v1/create"]; ok {
+		t.Fatal("Did not expect path /v1/create — subject prefix should override group name in spec")
+	}
+}
+
+func TestWithGroupTags(t *testing.T) {
+	s := runServer(t)
+	defer s.Shutdown()
+	nc := connect(t, s)
+	defer nc.Close()
+
+	svc, err := micro.AddService(nc, micro.Config{
+		Name:    "tagapp",
+		Version: "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Failed to add service: %v", err)
+	}
+	defer svc.Stop()
+
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
+	if err != nil {
+		t.Fatalf("Failed to create API: %v", err)
+	}
+
+	admin := api.AddGroup("admin", openapi.WithGroupTags("admin"))
+	err = openapi.Register(
+		admin, "list-users",
+		func(req openapi.TypedRequest[struct{}]) (*CreateUserOutput, error) {
+			return &CreateUserOutput{ID: "1"}, nil
+		},
+		openapi.WithSummary("List users"),
+	)
+	if err != nil {
+		t.Fatalf("Failed to register: %v", err)
+	}
+
+	// Group should still prefix the subject
+	msg, err := nc.Request("admin.list-users", nil, time.Second)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	var output CreateUserOutput
+	if err := json.Unmarshal(msg.Data, &output); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
+	if output.ID != "1" {
+		t.Fatalf("Expected ID '1', got %q", output.ID)
+	}
+
+	// Group should apply explicit tags
+	var doc openapi.Document
+	if err := json.Unmarshal(api.Spec(), &doc); err != nil {
+		t.Fatalf("Unmarshal spec: %v", err)
+	}
+	path, ok := doc.Paths["/admin/list-users"]
+	if !ok {
+		t.Fatalf("Expected path /admin/list-users, got paths: %v", keysOf(doc.Paths))
+	}
+	if path.Post == nil {
+		t.Fatal("Expected POST operation")
+	}
+	if len(path.Post.Tags) != 1 || path.Post.Tags[0] != "admin" {
+		t.Fatalf("Expected tag ['admin'], got %v", path.Post.Tags)
 	}
 }
 

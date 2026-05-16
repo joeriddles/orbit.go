@@ -41,6 +41,7 @@ type APIGroup struct {
 	api    *API
 	group  micro.Group
 	prefix string
+	tags   []string
 }
 
 type operationInfo struct {
@@ -110,11 +111,17 @@ func NewAPI(nc *nats.Conn, svc micro.Service, cfg APIConfig) (*API, error) {
 }
 
 func (a *API) AddGroup(name string, opts ...GroupOpt) *APIGroup {
-	g := a.svc.AddGroup(name, opts...)
+	cfg := parseGroupOpts(opts)
+	prefix := name
+	if cfg.subjectPrefix != "" {
+		prefix = cfg.subjectPrefix
+	}
+	g := a.svc.AddGroup(name, cfg.microOpts...)
 	return &APIGroup{
 		api:    a,
 		group:  g,
-		prefix: name,
+		prefix: prefix,
+		tags:   cfg.tags,
 	}
 }
 
@@ -147,10 +154,11 @@ func (g *APIGroup) AddEndpoint(name string, handler micro.Handler, opts ...Endpo
 		opt(&cfg)
 	}
 
-	if cfg.subject == "" {
-		cfg.subject = name
+	subject := cfg.subject
+	if subject == "" {
+		subject = name
 	}
-	cfg.subject = joinSubject(g.prefix, cfg.subject)
+	fullSubject := joinSubject(g.prefix, subject)
 
 	microOpts := buildMicroOpts(&cfg)
 	if err := g.group.AddEndpoint(name, handler, microOpts...); err != nil {
@@ -158,8 +166,9 @@ func (g *APIGroup) AddEndpoint(name string, handler micro.Handler, opts ...Endpo
 	}
 
 	op := newOperationInfo(name, &cfg)
-	if len(op.tags) == 0 {
-		op.tags = []string{g.prefix}
+	op.subject = fullSubject
+	if len(op.tags) == 0 && len(g.tags) > 0 {
+		op.tags = g.tags
 	}
 
 	g.api.mu.Lock()
@@ -170,11 +179,13 @@ func (g *APIGroup) AddEndpoint(name string, handler micro.Handler, opts ...Endpo
 }
 
 func (g *APIGroup) AddGroup(name string, opts ...GroupOpt) *APIGroup {
-	sub := g.group.AddGroup(name, opts...)
+	cfg := parseGroupOpts(opts)
+	sub := g.group.AddGroup(name, cfg.microOpts...)
 	return &APIGroup{
 		api:    g.api,
 		group:  sub,
 		prefix: joinSubject(g.prefix, name),
+		tags:   cfg.tags,
 	}
 }
 
@@ -323,8 +334,8 @@ func (g *APIGroup) registerTyped(name string, handler micro.Handler, cfg *endpoi
 
 	op.name = name
 	op.subject = fullSubject
-	if len(op.tags) == 0 {
-		op.tags = []string{g.prefix}
+	if len(op.tags) == 0 && len(g.tags) > 0 {
+		op.tags = g.tags
 	}
 
 	g.api.mu.Lock()

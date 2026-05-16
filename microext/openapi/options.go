@@ -4,7 +4,29 @@ import "github.com/nats-io/nats.go/micro"
 
 type EndpointOpt func(*endpointConfig)
 
-type GroupOpt = micro.GroupOpt
+type GroupOpt func(*groupConfig)
+
+type groupConfig struct {
+	subjectPrefix string
+	tags          []string
+	microOpts     []micro.GroupOpt
+}
+
+func WithGroupSubjectPrefix(prefix string) GroupOpt {
+	return func(c *groupConfig) { c.subjectPrefix = prefix }
+}
+
+func WithGroupTags(tags ...string) GroupOpt {
+	return func(c *groupConfig) { c.tags = tags }
+}
+
+func parseGroupOpts(opts []GroupOpt) groupConfig {
+	var cfg groupConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg
+}
 
 type endpointConfig struct {
 	subject        string
