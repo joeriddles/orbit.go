@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -393,7 +394,7 @@ func TestAddEndpointTier2(t *testing.T) {
 		t.Fatalf("Failed to create API: %v", err)
 	}
 
-	err = api.AddEndpoint("health", micro.HandlerFunc(func(req micro.Request) {
+	err = api.AddEndpoint("health", openapi.HandlerFunc(func(req openapi.Request) {
 		req.Respond([]byte(`{"status":"ok"}`))
 	}),
 		openapi.WithResponseSchema(`{"type":"object","properties":{"status":{"type":"string"}}}`),
@@ -781,6 +782,154 @@ func TestNoInputType(t *testing.T) {
 	}
 	if path.Post.RequestBody != nil {
 		t.Fatal("Expected no request body for struct{} input")
+	}
+}
+
+func TestContextPropagation(t *testing.T) {
+	s := runServer(t)
+	defer s.Shutdown()
+	nc := connect(t, s)
+	defer nc.Close()
+
+	svc, err := micro.AddService(nc, micro.Config{
+		Name:    "ctxtest",
+		Version: "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Failed to add service: %v", err)
+	}
+	defer svc.Stop()
+
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
+	if err != nil {
+		t.Fatalf("Failed to create API: %v", err)
+	}
+
+	type contextKey string
+
+	traceIDKey := contextKey("trace-id")
+
+	api.Use(func(next openapi.Handler) openapi.Handler {
+		return openapi.HandlerFunc(func(req openapi.Request) {
+			traceID := req.Headers().Get("X-Trace-ID")
+			ctx := context.WithValue(req.Context(), traceIDKey, traceID)
+			next.HandleRequest(openapi.WithContext(req, ctx))
+		})
+	})
+
+	err = openapi.Register(
+		api, "echo",
+		func(req openapi.TypedRequest[struct{}]) (*CreateUserOutput, error) {
+			traceID, _ := req.Context().Value(traceIDKey).(string)
+			return &CreateUserOutput{ID: traceID}, nil
+		},
+		openapi.WithSubject("ctxtest.echo"),
+	)
+	if err != nil {
+		t.Fatalf("Failed to register: %v", err)
+	}
+
+	msg := nats.NewMsg("ctxtest.echo")
+	msg.Header.Set("X-Trace-ID", "abc-123")
+	resp, err := nc.RequestMsg(msg, time.Second)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+
+	var output CreateUserOutput
+	if err := json.Unmarshal(resp.Data, &output); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
+	if output.ID != "abc-123" {
+		t.Fatalf("Expected trace ID 'abc-123', got %q", output.ID)
+	}
+}
+
+func TestContextDefaultsToBackground(t *testing.T) {
+	s := runServer(t)
+	defer s.Shutdown()
+	nc := connect(t, s)
+	defer nc.Close()
+
+	svc, err := micro.AddService(nc, micro.Config{
+		Name:    "ctxdefault",
+		Version: "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Failed to add service: %v", err)
+	}
+	defer svc.Stop()
+
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
+	if err != nil {
+		t.Fatalf("Failed to create API: %v", err)
+	}
+
+	err = openapi.Register(
+		api, "check",
+		func(req openapi.TypedRequest[struct{}]) (*CreateUserOutput, error) {
+			if req.Context() == nil {
+				return &CreateUserOutput{ID: "nil"}, nil
+			}
+			return &CreateUserOutput{ID: "ok"}, nil
+		},
+		openapi.WithSubject("ctxdefault.check"),
+	)
+	if err != nil {
+		t.Fatalf("Failed to register: %v", err)
+	}
+
+	resp, err := nc.Request("ctxdefault.check", nil, time.Second)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+
+	var output CreateUserOutput
+	if err := json.Unmarshal(resp.Data, &output); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
+	if output.ID != "ok" {
+		t.Fatalf("Expected context to be non-nil, got %q", output.ID)
+	}
+}
+
+func TestAddEndpointWithContext(t *testing.T) {
+	s := runServer(t)
+	defer s.Shutdown()
+	nc := connect(t, s)
+	defer nc.Close()
+
+	svc, err := micro.AddService(nc, micro.Config{
+		Name:    "addepctx",
+		Version: "1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("Failed to add service: %v", err)
+	}
+	defer svc.Stop()
+
+	api, err := openapi.NewAPI(nc, svc, openapi.APIConfig{})
+	if err != nil {
+		t.Fatalf("Failed to create API: %v", err)
+	}
+
+	err = api.AddEndpoint("ctxcheck", openapi.HandlerFunc(func(req openapi.Request) {
+		if req.Context() != nil {
+			req.Respond([]byte("has-context"))
+		} else {
+			req.Respond([]byte("no-context"))
+		}
+	}))
+	if err != nil {
+		t.Fatalf("Failed to add endpoint: %v", err)
+	}
+
+	resp, err := nc.Request("ctxcheck", nil, time.Second)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if string(resp.Data) != "has-context" {
+		t.Fatalf("Expected 'has-context', got %q", string(resp.Data))
 	}
 }
 

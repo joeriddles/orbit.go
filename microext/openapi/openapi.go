@@ -25,8 +25,6 @@ const (
 
 const openApiSubject = "$SRV.INFO.%s.$openapi"
 
-type Middleware func(micro.Handler) micro.Handler
-
 type APIConfig struct {
 	SubjectPrefix string
 }
@@ -66,12 +64,12 @@ type operationInfo struct {
 type TypedHandler[I, O any] func(TypedRequest[I]) (*O, error)
 
 type TypedRequest[I any] interface {
-	micro.Request
+	Request
 	Body() I
 }
 
 type typedRequest[I any] struct {
-	micro.Request
+	Request
 	body I
 }
 
@@ -120,11 +118,17 @@ func (g *APIGroup) Use(middlewares ...Middleware) {
 	g.middlewares = append(g.middlewares, middlewares...)
 }
 
-func applyMiddleware(h micro.Handler, middlewares []Middleware) micro.Handler {
+func applyMiddleware(h Handler, middlewares []Middleware) Handler {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		h = middlewares[i](h)
 	}
 	return h
+}
+
+func toMicroHandler(h Handler) micro.Handler {
+	return micro.HandlerFunc(func(req micro.Request) {
+		h.HandleRequest(newRequest(req))
+	})
 }
 
 func (a *API) AddGroup(name string, opts ...GroupOpt) *APIGroup {
@@ -145,7 +149,7 @@ func (a *API) AddGroup(name string, opts ...GroupOpt) *APIGroup {
 	}
 }
 
-func (a *API) AddEndpoint(name string, handler micro.Handler, opts ...EndpointOpt) error {
+func (a *API) AddEndpoint(name string, handler Handler, opts ...EndpointOpt) error {
 	var cfg endpointConfig
 	for _, opt := range opts {
 		opt(&cfg)
@@ -157,7 +161,7 @@ func (a *API) AddEndpoint(name string, handler micro.Handler, opts ...EndpointOp
 
 	microOpts := buildMicroOpts(&cfg)
 	wrapped := applyMiddleware(handler, a.middlewares)
-	if err := a.svc.AddEndpoint(name, wrapped, microOpts...); err != nil {
+	if err := a.svc.AddEndpoint(name, toMicroHandler(wrapped), microOpts...); err != nil {
 		return err
 	}
 
@@ -170,7 +174,7 @@ func (a *API) AddEndpoint(name string, handler micro.Handler, opts ...EndpointOp
 	return nil
 }
 
-func (g *APIGroup) AddEndpoint(name string, handler micro.Handler, opts ...EndpointOpt) error {
+func (g *APIGroup) AddEndpoint(name string, handler Handler, opts ...EndpointOpt) error {
 	var cfg endpointConfig
 	for _, opt := range opts {
 		opt(&cfg)
@@ -184,7 +188,7 @@ func (g *APIGroup) AddEndpoint(name string, handler micro.Handler, opts ...Endpo
 
 	microOpts := buildMicroOpts(&cfg)
 	wrapped := applyMiddleware(handler, g.middlewares)
-	if err := g.group.AddEndpoint(name, wrapped, microOpts...); err != nil {
+	if err := g.group.AddEndpoint(name, toMicroHandler(wrapped), microOpts...); err != nil {
 		return err
 	}
 
@@ -259,7 +263,7 @@ func Register[I, O any](target any, name string, handler TypedHandler[I, O], opt
 
 	hasInput := reflect.TypeFor[I]() != reflect.TypeFor[struct{}]()
 
-	wrappedHandler := micro.HandlerFunc(func(req micro.Request) {
+	wrappedHandler := HandlerFunc(func(req Request) {
 		var input I
 
 		if hasInput {
@@ -326,14 +330,14 @@ func Register[I, O any](target any, name string, handler TypedHandler[I, O], opt
 	}
 }
 
-func (a *API) registerTyped(name string, handler micro.Handler, cfg *endpointConfig, op *operationInfo) error {
+func (a *API) registerTyped(name string, handler Handler, cfg *endpointConfig, op *operationInfo) error {
 	if cfg.subject == "" {
 		cfg.subject = name
 	}
 
 	microOpts := buildMicroOptsFromOp(cfg, op)
 	wrapped := applyMiddleware(handler, a.middlewares)
-	if err := a.svc.AddEndpoint(name, wrapped, microOpts...); err != nil {
+	if err := a.svc.AddEndpoint(name, toMicroHandler(wrapped), microOpts...); err != nil {
 		return err
 	}
 
@@ -347,7 +351,7 @@ func (a *API) registerTyped(name string, handler micro.Handler, cfg *endpointCon
 	return nil
 }
 
-func (g *APIGroup) registerTyped(name string, handler micro.Handler, cfg *endpointConfig, op *operationInfo) error {
+func (g *APIGroup) registerTyped(name string, handler Handler, cfg *endpointConfig, op *operationInfo) error {
 	subject := name
 	if cfg.subject != "" {
 		subject = cfg.subject
@@ -356,7 +360,7 @@ func (g *APIGroup) registerTyped(name string, handler micro.Handler, cfg *endpoi
 
 	microOpts := buildMicroOptsFromOp(cfg, op)
 	wrapped := applyMiddleware(handler, g.middlewares)
-	if err := g.group.AddEndpoint(name, wrapped, microOpts...); err != nil {
+	if err := g.group.AddEndpoint(name, toMicroHandler(wrapped), microOpts...); err != nil {
 		return err
 	}
 
